@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>StreamPay - Corporate Micro-Salary &amp; Vesting Protocol</title>
+<link rel="stylesheet" href="styles.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%E2%9A%A1%3C/text%3E%3C/svg%3E" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">~</span>
+    <div>
+      <h1>StreamPay</h1>
+      <p class="tag">Corporate Micro-Salary &amp; Vesting Protocol</p>
+    </div>
+  </div>
+  <div class="wallet">
+    <div class="wallet-meta">
+      <span class="label">Account</span>
+      <span id="account" class="mono">not connected</span>
+    </div>
+    <div class="wallet-meta">
+      <span class="label">Chain</span>
+      <span id="chain" class="mono">-</span>
+    </div>
+    <div class="wallet-meta">
+      <span class="label">Role</span>
+      <span id="role" class="badge">-</span>
+    </div>
+    <button id="connectBtn" class="primary">Connect MetaMask</button>
+    <button id="refreshBtn" class="ghost" title="Re-read all state from the chain">Refresh</button>
+  </div>
+</header>
+
+<!-- Banners -->
+<div id="noWallet" class="banner error" hidden>
+  MetaMask was not detected. Install the MetaMask extension and open this page in that browser profile.
+</div>
+<div id="wrongNetwork" class="banner warn" hidden>
+  <span>You are on the wrong network. StreamPay lives on the local Anvil chain (ID 31337).</span>
+  <button id="switchBtn" class="primary small">Switch to Anvil</button>
+</div>
+<div id="txStatus" class="banner info" hidden></div>
+
+<main>
+
+  <!-- ADMIN -->
+  <section id="adminSection" class="card" hidden>
+    <h2>Protocol Admin</h2>
+    <p class="hint">You are the contract deployer (Anvil Account #0). You collect a 1% fee on every settled salary.</p>
+    <div class="stat-row">
+      <div class="stat">
+        <span class="stat-label">Unclaimed protocol fees</span>
+        <span id="adminFee" class="stat-value mono">0 ETH</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Contract ETH balance</span>
+        <span id="contractBal" class="stat-value mono">0 ETH</span>
+      </div>
+    </div>
+    <button id="claimBtn" class="primary" data-write disabled>Claim Admin Fees</button>
+  </section>
+
+  <!-- EMPLOYER -->
+  <section id="employerSection" class="card" hidden>
+    <h2>Employer</h2>
+
+    <details class="setup" id="setupBox">
+      <summary>Company setup (do this once per employee)</summary>
+      <p class="hint">
+        The brief says a stream is created for an employee <em>registered under their companyId</em>.
+        Registering an employee automatically creates your company if you do not have one yet.
+      </p>
+      <div class="form-row">
+        <label for="regEmployee">Employee address</label>
+        <input id="regEmployee" class="mono" placeholder="0x..." autocomplete="off" />
+        <button id="registerBtn" class="secondary" data-write disabled>Register Employee</button>
+      </div>
+      <p class="hint">Your company ID: <span id="companyId" class="mono">not registered</span></p>
+    </details>
+
+    <h3>Create a salary stream</h3>
+    <div class="form-grid">
+      <div>
+        <label for="recipient">Recipient (employee address)</label>
+        <input id="recipient" class="mono" placeholder="0x..." autocomplete="off" />
+      </div>
+      <div>
+        <label for="duration">Duration (seconds, must be &gt; 15)</label>
+        <input id="duration" type="number" min="16" step="1" value="120" />
+      </div>
+      <div>
+        <label for="amount">Amount (ETH)</label>
+        <input id="amount" type="number" min="0" step="0.01" value="1" />
+      </div>
+      <div class="form-action">
+        <button id="createBtn" class="primary" data-write disabled>Create Stream</button>
+      </div>
+    </div>
+    <p id="createError" class="inline-error" hidden></p>
+
+    <h3>Outgoing streams</h3>
+    <div id="outgoingList" class="stream-list"><p class="empty">No outgoing streams yet.</p></div>
+  </section>
+
+  <!-- EMPLOYEE -->
+  <section id="employeeSection" class="card" hidden>
+    <h2>Employee</h2>
+    <p class="hint">
+      The claimable figure below ticks locally every second from a single on-chain snapshot -
+      no RPC request per second.
+    </p>
+    <div id="incomingList" class="stream-list"><p class="empty">No incoming streams yet.</p></div>
+    <p id="employerToggleRow" class="hint" hidden style="margin-top:16px">
+      Need to pay someone yourself?
+      <button id="employerToggleBtn" class="ghost small">Show employer tools</button>
+    </p>
+  </section>
+
+  <section id="emptyState" class="card" hidden>
+    <h2>Nothing to show for this account</h2>
+    <p class="hint">Switch MetaMask to the employer account to create a stream, or to the employee account to withdraw.</p>
+  </section>
+
+</main>
+
+<footer>
+  <span class="mono" id="contractAddrOut">-</span>
+  <span>CSE729 Project 2 &middot; local Anvil prototype, not audited, not for real funds.</span>
+</footer>
+
+<!-- Ethers v6.7.0, UMD build - exposes a global `ethers`, the same build Lab 5 uses.
+     Served from the repo so the demo still works if the viva room has no internet.
+     The CDN equivalent is:
+     <script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.7.0/ethers.umd.min.js"></script> -->
+<script src="vendor/ethers.umd.min.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

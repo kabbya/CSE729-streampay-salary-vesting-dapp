@@ -1,0 +1,14 @@
+{
+  "name": "streampay-verification",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "scripts": {
+    "verify:math": "node tools/verify-frontend-math.mjs",
+    "verify:ui": "node tools/e2e-ui-test.mjs"
+  },
+  "dependencies": {
+    "ethers": "6.7.0",
+    "playwright": "1.62.1"
+  }
+}
