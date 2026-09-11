@@ -23,6 +23,10 @@
       <span id="account" class="mono">not connected</span>
     </div>
     <div class="wallet-meta">
+      <span class="label">Balance</span>
+      <span id="balance" class="mono">-</span>
+    </div>
+    <div class="wallet-meta">
       <span class="label">Chain</span>
       <span id="chain" class="mono">-</span>
     </div>
@@ -46,6 +50,30 @@
 <div id="txStatus" class="banner info" hidden></div>
 
 <main>
+
+  <!-- WALLET BALANCE (any role) -->
+  <section id="balanceSection" class="card" hidden>
+    <h2>Wallet Balance</h2>
+    <div class="stat-row">
+      <div class="stat">
+        <span class="stat-label">Wallet balance now</span>
+        <span id="actBalanceNow" class="stat-value mono">-</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Before last event</span>
+        <span id="actBefore" class="stat-value mono">-</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">After last event</span>
+        <span id="actAfter" class="stat-value mono">-</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label">Change at last event</span>
+        <span id="actDelta" class="stat-value mono">-</span>
+      </div>
+    </div>
+    <p id="actLastLine" class="hint mono">-</p>
+  </section>
 
   <!-- ADMIN -->
   <section id="adminSection" class="card" hidden>
@@ -123,6 +151,27 @@
   <section id="emptyState" class="card" hidden>
     <h2>Nothing to show for this account</h2>
     <p class="hint">Switch MetaMask to the employer account to create a stream, or to the employee account to withdraw.</p>
+  </section>
+
+  <!-- WALLET ACTIVITY (any role) -->
+  <section id="activitySection" class="card" hidden>
+    <div class="stream-head">
+      <h2>Wallet Activity</h2>
+      <button id="activityToggle" class="ghost small" hidden>Show all</button>
+    </div>
+    <p class="hint">
+      StreamPay events involving this account, newest first. Read from the contract's event log on each
+      refresh - it updates after a transaction, a contract event, or Refresh, never on the 1-second tick.
+    </p>
+    <div class="tablewrap">
+      <table class="activity">
+        <thead>
+          <tr><th>Block</th><th>Event</th><th>Stream</th><th>Amount</th><th>Detail</th><th>Tx</th></tr>
+        </thead>
+        <tbody id="activityBody"></tbody>
+      </table>
+    </div>
+    <p class="hint">* accrues to the admin's unclaimed fee balance inside the contract, not to the wallet.</p>
   </section>
 
 </main>

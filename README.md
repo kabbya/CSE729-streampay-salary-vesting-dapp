@@ -110,10 +110,12 @@ Worked example, 1 ETH over 100 s, withdraw at 40 s, cancel at 70 s:
 
 ## Tests
 
-`forge test` - 38 tests across two suites: `StreamPay.t.sol` (35, including two fuzzed
-properties and a conservation-of-funds invariant) and `AdversarialEdgeCases.t.sol` (3 wei-level
+`forge test` - 39 tests across three suites: `StreamPay.t.sol` (35, including two fuzzed
+properties and a conservation-of-funds invariant), `AdversarialEdgeCases.t.sol` (3 wei-level
 edge cases: a `type(uint256).max` duration must not lock funds, batch reads reject unknown
-IDs, and a final 1-wei claim whose whole value is fee still settles and closes the stream).
+IDs, and a final 1-wei claim whose whole value is fee still settles and closes the stream),
+and `Reentrancy.t.sol` (1: a malicious employee contract that calls `withdraw` again from
+its `receive()` is rejected with `Reentrancy()` and paid exactly once).
 
 ```
 forge test -vvv
@@ -142,6 +144,7 @@ Expected: `differential check: 36 comparisons, 0 mismatches` and `28/28 UI check
 src/StreamPay.sol              the contract
 test/StreamPay.t.sol           35 Forge tests
 test/AdversarialEdgeCases.t.sol    3 wei-level edge-case tests
+test/Reentrancy.t.sol          1 live reentrancy-attack test
 script/DeployStreamPay.s.sol   deploys from Account #0
 frontend/index.html            role-aware UI
 frontend/app.js                Ethers v6 client, single-fetch ticking engine
@@ -163,6 +166,14 @@ docs/screenshots/              checkpoint evidence
   `getBlock("latest")` for 250 ms, which can hand the ticking engine a stale timestamp.
 - Events that arrive while a refresh is already running are not dropped; the refresh
   loops once more.
+- The header shows the connected wallet's ETH balance. A **Wallet Balance** card at the
+  top shows that balance next to the wallet's balance immediately before and after the
+  newest StreamPay event that involved it; a **Wallet Activity** card at the bottom lists
+  those events (6 by default, "Show all" for up to 50). Stream lists show every active
+  stream plus the 3 most recent closed ones, with "Show all closed" for the rest. All of it is read inside the same
+  `refresh()` snapshot - one `getBalance`, one `eth_getLogs`, two historical `getBalance`
+  reads - so the 1-second tick still makes zero network requests. The change at the last
+  event and the event's own amount differ by exactly the gas paid; the card says so.
 
 ## Known limitations
 

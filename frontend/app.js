@@ -14,6 +14,9 @@ const CFG = window.STREAMPAY_CONFIG;
 const FEE_BPS = 100n;          // 1%
 const BPS_DENOMINATOR = 10_000n;
 const STATUS = { NONE: 0n, ACTIVE: 1n, CLOSED: 2n };
+const ACTIVITY_PREVIEW = 6;    // rows shown before "Show all"
+const ACTIVITY_MAX = 50;       // rows kept in memory
+const CLOSED_PREVIEW = 3;      // closed streams shown per list before "Show all closed"
 
 /* ---------------------------------------------------------------- state --- */
 const S = {
@@ -32,6 +35,11 @@ const S = {
   contractBalance: 0n,
   outgoing: [],         // array of normalised stream objects
   incoming: [],
+  accountBalance: 0n,   // connected wallet's ETH balance at the last snapshot
+  activity: [],         // StreamPay events involving this account, newest first (max 50)
+  activityExpanded: false, // false = show the first ACTIVITY_PREVIEW rows only
+  closedExpanded: { employer: false, employee: false }, // per-list "Show all closed" state
+  lastEvent: null,      // newest activity row, plus wallet balance before/after its block
   chainTimeBase: 0n,       // max(latest block time, wall time) at the last snapshot
   chainTimeBaseMs: 0,      // performance.now() at that same snapshot
   tickTimer: null,         // exactly ONE interval for the whole page
@@ -69,6 +77,12 @@ function eth(value) {
   const useful = fraction.replace(/0+$/, "");
   if (!useful) return whole + " ETH";
   return whole + "." + useful.slice(0, 6) + (useful.length > 6 ? "…" : "") + " ETH";
+}
+
+/** eth() with an explicit sign, for balance changes: "+0.99 ETH", "-1 ETH", "0 ETH". */
+function signedEth(value) {
+  const wei = BigInt(value);
+  return (wei > 0n ? "+" : "") + eth(wei);
 }
 
 function status(kind, message) {
@@ -147,8 +161,13 @@ function clearRenderedState() {
   S.contractBalance = 0n;
   S.outgoing = [];
   S.incoming = [];
+  S.accountBalance = 0n;
+  S.activity = [];
+  S.lastEvent = null;
+  $("balance").textContent = "-";
   liveNodes.length = 0;
-  for (const id of ["adminSection", "employerSection", "employeeSection", "employerToggleRow", "emptyState"]) {
+  for (const id of ["balanceSection", "adminSection", "employerSection", "employeeSection",
+                    "employerToggleRow", "emptyState", "activitySection"]) {
     show(id, false);
   }
   setWriteAvailability(false);
@@ -285,6 +304,84 @@ async function loadStreams(ids) {
   return rows.map((raw, i) => toStream(ids[i], raw));
 }
 
+/**
+ * Wallet activity = the contract's own event log, filtered to this account, plus the
+ * wallet's balance immediately before and after the newest event's block.
+ *
+ * One eth_getLogs for every StreamPay event (fine on a local chain; on a public chain
+ * you would bound fromBlock to the deployment block), then two historical getBalance
+ * reads. All of it runs inside refresh(), so it happens after a transaction, a wallet
+ * change, a contract event, or the Refresh button - never on the 1-second tick.
+ */
+async function loadActivity() {
+  const me = S.account.toLowerCase();
+  const isAdmin = S.admin && S.admin.toLowerCase() === me;
+  const streamsById = new Map();
+  for (const s of [...S.outgoing, ...S.incoming]) streamsById.set(s.id.toString(), s);
+
+  const logs = await S.eventContract.queryFilter("*", 0, "latest");
+  const rows = [];
+  const push = (log, row) => rows.push({
+    block: log.blockNumber, index: log.index, tx: log.transactionHash, ...row
+  });
+
+  for (const log of logs) {
+    if (!log.fragment || !log.args) continue;          // not one of our events
+    const a = log.args;
+    const name = log.fragment.name;
+    const same = (addr) => ethers.getAddress(addr).toLowerCase() === me;
+
+    if (name === "CompanyRegistered" && same(a.employer)) {
+      push(log, { event: name, stream: "-", amount: 0n, wallet: false,
+                  note: "company #" + a.companyId.toString() + " created" });
+    } else if (name === "EmployeeRegistered") {
+      if (same(a.employer)) push(log, { event: name, stream: "-", amount: 0n, wallet: false,
+                                        note: "registered " + short(ethers.getAddress(a.employee)) });
+      else if (same(a.employee)) push(log, { event: name, stream: "-", amount: 0n, wallet: false,
+                                             note: "registered by " + short(ethers.getAddress(a.employer)) });
+    } else if (name === "StreamCreated") {
+      if (same(a.employer)) push(log, { event: name, stream: a.streamId.toString(),
+                                        amount: -BigInt(a.deposit), wallet: true, note: "deposit locked" });
+      else if (same(a.employee)) push(log, { event: name, stream: a.streamId.toString(), amount: 0n,
+                                             wallet: false, note: eth(a.deposit) + " stream opened for you" });
+    } else if (name === "SalaryWithdrawn") {
+      if (same(a.employee)) push(log, { event: name, stream: a.streamId.toString(),
+                                        amount: BigInt(a.netAmount), wallet: true,
+                                        note: "gross " + eth(a.grossAmount) + ", fee " + eth(a.fee) });
+      else if (isAdmin) push(log, { event: name, stream: a.streamId.toString(), amount: BigInt(a.fee),
+                                    wallet: false, note: "fee accrued to unclaimed" });
+    } else if (name === "StreamCancelled") {
+      const s = streamsById.get(a.streamId.toString());
+      if (s && s.employer.toLowerCase() === me) {
+        push(log, { event: name, stream: a.streamId.toString(), amount: BigInt(a.employerRefund),
+                    wallet: true, note: "unvested refund" });
+      } else if (s && s.employee.toLowerCase() === me) {
+        push(log, { event: name, stream: a.streamId.toString(), amount: BigInt(a.employeeNet),
+                    wallet: true, note: "vested salary paid out" });
+      }
+      if (isAdmin) push(log, { event: name, stream: a.streamId.toString(), amount: BigInt(a.fee),
+                               wallet: false, note: "fee accrued to unclaimed" });
+    } else if (name === "AdminFeesClaimed" && same(a.admin)) {
+      push(log, { event: name, stream: "-", amount: BigInt(a.amount), wallet: true, note: "fees claimed" });
+    }
+  }
+
+  // Newest first: by block, then by position inside the block.
+  rows.sort((x, y) => (y.block - x.block) || (y.index - x.index));
+  S.activity = rows.slice(0, ACTIVITY_MAX);
+  S.lastEvent = rows.length ? { ...rows[0] } : null;
+
+  if (S.lastEvent) {
+    const b = S.lastEvent.block;
+    const [before, after] = await Promise.all([
+      S.readProvider.getBalance(S.account, Math.max(0, b - 1)),
+      S.readProvider.getBalance(S.account, b)
+    ]);
+    S.lastEvent.before = BigInt(before);
+    S.lastEvent.after = BigInt(after);
+  }
+}
+
 let refreshRequested = false;
 
 async function refresh() {
@@ -298,12 +395,13 @@ async function refresh() {
       refreshRequested = false;
       const c = S.eventContract;
 
-      const [network, code, admin, feeBal, bal, companyId, outIds, inIds, block] = await Promise.all([
+      const [network, code, admin, feeBal, bal, myBal, companyId, outIds, inIds, block] = await Promise.all([
         S.readProvider.getNetwork(),
         S.readProvider.getCode(CFG.contractAddress),
         c.admin(),
         c.adminFeeBalance(),
         S.readProvider.getBalance(CFG.contractAddress),
+        S.readProvider.getBalance(S.account),
         c.companyIdOf(S.account),
         c.getOutgoingStreamIds(S.account),
         c.getIncomingStreamIds(S.account),
@@ -316,6 +414,7 @@ async function refresh() {
       S.admin = ethers.getAddress(admin);
       S.adminFeeBalance = BigInt(feeBal);
       S.contractBalance = BigInt(bal);
+      S.accountBalance = BigInt(myBal);
       S.companyId = BigInt(companyId);
 
       // Idle Anvil can report an old latest block. Start from max(block, wall), then
@@ -327,6 +426,7 @@ async function refresh() {
 
       S.outgoing = await loadStreams(outIds.map((x) => x.toString()));
       S.incoming = await loadStreams(inIds.map((x) => x.toString()));
+      await loadActivity();   // history is part of the same snapshot, not a separate poll
 
       setWriteAvailability(Boolean(S.writeContract));
       render();
@@ -364,6 +464,8 @@ function render() {
   if (hasOutgoing || (showEmployer && !isAdmin && !hasIncoming)) roles.push("Employer");
   if (hasIncoming) roles.push("Employee");
   $("role").textContent = roles.length ? roles.join(" + ") : "Visitor";
+  $("balance").textContent = eth(S.accountBalance);
+  $("balance").title = ethers.formatEther(S.accountBalance) + " ETH";
   $("contractAddrOut").textContent = "Contract " + CFG.contractAddress;
 
   show("adminSection", isAdmin);
@@ -387,7 +489,70 @@ function render() {
     renderList($("incomingList"), S.incoming, "employee", "No incoming streams yet.");
   }
 
+  show("balanceSection", true);
+  show("activitySection", true);
+  renderActivity();
+
   tick();   // paint the live numbers immediately instead of waiting a second
+}
+
+/** Wallet activity card: balance now, balance around the newest event, and a short history. */
+function renderActivity() {
+  $("actBalanceNow").textContent = eth(S.accountBalance);
+  const last = S.lastEvent;
+
+  if (!last) {
+    $("actBefore").textContent = "-";
+    $("actAfter").textContent = "-";
+    $("actDelta").textContent = "-";
+    $("actDelta").className = "stat-value mono";
+    $("actLastLine").textContent = "No StreamPay activity for this account yet.";
+  } else {
+    const delta = last.after - last.before;
+    $("actBefore").textContent = eth(last.before);
+    $("actAfter").textContent = eth(last.after);
+    $("actDelta").textContent = signedEth(delta);
+    $("actDelta").className = "stat-value mono " + (delta > 0n ? "up" : delta < 0n ? "down" : "");
+    const gas = last.wallet ? delta - last.amount : delta;
+    $("actLastLine").textContent =
+      "Last event: " + last.event +
+      (last.stream !== "-" ? " on Stream #" + last.stream : "") +
+      " in block " + last.block +
+      " - protocol amount " + signedEth(last.amount) +
+      (last.wallet ? "" : " (accounting only, wallet unchanged)") +
+      (gas !== 0n ? "; remaining " + signedEth(gas) + " is gas" : "") + ".";
+  }
+
+  const toggle = $("activityToggle");
+  const total = S.activity.length;
+  toggle.hidden = total <= ACTIVITY_PREVIEW;
+  toggle.textContent = S.activityExpanded ? "Show fewer" : "Show all (" + total + ")";
+  const visible = S.activityExpanded ? S.activity : S.activity.slice(0, ACTIVITY_PREVIEW);
+
+  const body = $("activityBody");
+  body.textContent = "";
+  if (total === 0) {
+    const tr = el("tr");
+    const td = el("td", "empty", "Nothing yet.");
+    td.colSpan = 6;
+    tr.appendChild(td);
+    body.appendChild(tr);
+    return;
+  }
+  for (const r of visible) {
+    const tr = el("tr");
+    tr.appendChild(el("td", "mono", String(r.block)));
+    tr.appendChild(el("td", "", r.event));
+    tr.appendChild(el("td", "mono", r.stream === "-" ? "-" : "#" + r.stream));
+    const amt = el("td", "mono " + (r.amount > 0n ? "up" : r.amount < 0n ? "down" : ""),
+                   r.wallet ? signedEth(r.amount) : (r.amount === 0n ? "-" : signedEth(r.amount) + " *"));
+    tr.appendChild(amt);
+    tr.appendChild(el("td", "muted", r.note));
+    const txCell = el("td", "mono", short(r.tx));
+    txCell.title = r.tx;
+    tr.appendChild(txCell);
+    body.appendChild(tr);
+  }
 }
 
 function renderList(container, streams, role, emptyText) {
@@ -398,7 +563,27 @@ function renderList(container, streams, role, emptyText) {
   const sorted = [...streams].sort((a, b) =>
     (a.status === b.status) ? Number(b.id - a.id) : Number(a.status - b.status));
 
-  for (const s of sorted) container.appendChild(streamCard(s, role));
+  // Every active stream is always visible. Closed ones are history: show the most
+  // recent few and let the user expand the rest, so a long-lived account stays readable.
+  const active = sorted.filter((s) => s.status !== STATUS.CLOSED);
+  const closed = sorted.filter((s) => s.status === STATUS.CLOSED);
+  const expanded = S.closedExpanded[role];
+  const visibleClosed = expanded ? closed : closed.slice(0, CLOSED_PREVIEW);
+
+  for (const s of [...active, ...visibleClosed]) container.appendChild(streamCard(s, role));
+
+  if (closed.length > CLOSED_PREVIEW) {
+    const row = el("p", "hint");
+    row.style.margin = "4px 0 0";
+    const hiddenCount = closed.length - visibleClosed.length;
+    row.appendChild(document.createTextNode(
+      expanded ? "Showing all " + closed.length + " closed streams. "
+               : hiddenCount + " older closed stream" + (hiddenCount === 1 ? "" : "s") + " hidden. "));
+    const btn = el("button", "ghost small", expanded ? "Show fewer" : "Show all closed (" + closed.length + ")");
+    btn.addEventListener("click", () => { S.closedExpanded[role] = !expanded; render(); });
+    row.appendChild(btn);
+    container.appendChild(row);
+  }
 }
 
 function streamCard(s, role) {
@@ -600,6 +785,7 @@ async function boot() {
   });
   $("refreshBtn").addEventListener("click", refresh);
   $("employerToggleBtn").addEventListener("click", () => { S.forceEmployer = true; render(); });
+  $("activityToggle").addEventListener("click", () => { S.activityExpanded = !S.activityExpanded; renderActivity(); });
   $("switchBtn").addEventListener("click", switchNetwork);
   $("createBtn").addEventListener("click", onCreateStream);
   $("registerBtn").addEventListener("click", onRegisterEmployee);
